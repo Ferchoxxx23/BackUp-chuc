@@ -27,7 +27,9 @@ Route::get('/empleos', [BackupController::class, 'viewEmpleos'])->name('empleos.
 // --- ACCIONES DE DATOS Y SISTEMA ---
 
 // Procesar la creación del respaldo .sql
-Route::post('/backup/create', [BackupController::class, 'createBackup'])->name('backup.create');// Procesar la restauración de la base de datos
+Route::post('/backup/create', [BackupController::class, 'createBackup'])->name('backup.create');
+
+// Procesar la restauración de la base de datos
 Route::post('/backup/restore', [BackupController::class, 'restoreBackup'])->name('backup.restore');
 
 // Insertar datos (usado por los modales en Personas y Empleos)

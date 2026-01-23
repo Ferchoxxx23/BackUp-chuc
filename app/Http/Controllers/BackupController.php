@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Models\Persona;
 use App\Models\Empleo;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 date_default_timezone_set('America/Mexico_City');
 
@@ -18,9 +19,10 @@ class BackupController extends Controller
     {
         return view('mantenimiento');
     }
+
     public function viewHome()
-{
-    return view('home');
+    {
+        return view('home');
     }
 
     public function viewPersonas()
@@ -39,68 +41,65 @@ class BackupController extends Controller
     }
 
     /**
-     * Proceso de creación de respaldo SQL
+     * PROCESO DE RESPALDO: Descarga el SQL directamente al navegador
      */
-    public function createBackup()
-    {
-        $filename = "Respaldo_" . date('Y-m-d_H-i-s') . ".sql";
-        $path = storage_path("app/backups");
+ public function createBackup()
+{
+    $filename = "Respaldo_" . date('Y-m-d_H-i-s') . ".sql";
+    $content = "-- Respaldo generado automáticamente\n";
+    $content .= "-- Fecha: " . date('Y-m-d H:i:s') . "\n\n";
+    $content .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
 
-        if (!file_exists($path)) {
-            mkdir($path, 0777, true);
+    $tables = ['persona', 'empleo']; 
+
+    foreach ($tables as $table) {
+        $res = DB::select("SHOW CREATE TABLE $table");
+        $createTableSql = ((array)$res[0])['Create Table'];
+        $content .= "DROP TABLE IF EXISTS `$table`;\n" . $createTableSql . ";\n\n";
+
+        $rows = DB::table($table)->get();
+        foreach ($rows as $row) {
+            $rowArray = (array)$row;
+            $columns = implode("`, `", array_keys($rowArray));
+            $escapedValues = array_map(function($value) {
+                if (is_null($value)) return "NULL";
+                return "'" . addslashes($value) . "'";
+            }, array_values($rowArray));
+
+            $content .= "INSERT INTO `$table` (`$columns`) VALUES (" . implode(", ", $escapedValues) . ");\n";
         }
-
-        $fullPath = $path . DIRECTORY_SEPARATOR . $filename;
-
-        $command = sprintf(
-            'mysqldump --opt --routines --triggers -h %s -u %s %s %s > "%s"',
-            env('DB_HOST'),
-            env('DB_USERNAME'),
-            env('DB_PASSWORD') ? '-p' . env('DB_PASSWORD') : '',
-            env('DB_DATABASE'),
-            $fullPath
-        );
-
-        exec($command, $output, $returnVar);
-
-        return ($returnVar === 0) 
-            ? back()->with('status', "Respaldo generado: $filename") 
-            : back()->with('status', 'Error al crear el respaldo.');
+        $content .= "\n";
     }
 
+    $content .= "SET FOREIGN_KEY_CHECKS=1;\n";
+
+    // En lugar de StreamedResponse, usamos una respuesta normal con headers de descarga
+    return response($content)
+        ->header('Content-Type', 'application/sql')
+        ->header('Content-Disposition', "attachment; filename=\"$filename\"")
+        ->header('Pragma', 'no-cache')
+        ->header('Expires', '0');
+}
+
     /**
-     * Proceso de restauración de base de datos
+     * PROCESO DE RESTAURACIÓN: Lee el archivo SQL subido y lo ejecuta
      */
     public function restoreBackup(Request $request)
     {
-        $request->validate(['backup_file' => 'required']);
-        $file = $request->file('backup_file');
-        $filePath = $file->getRealPath();
-
-        $dbHost = env('DB_HOST');
-        $dbUser = env('DB_USERNAME');
-        $dbPass = env('DB_PASSWORD');
-        $dbName = env('DB_DATABASE');
-        $passwordFlag = $dbPass ? "-p$dbPass" : "";
+        $request->validate([
+            'backup_file' => 'required|file'
+        ]);
 
         try {
-            // Asegurar existencia de la base de datos
-            $createCommand = "mysql -h $dbHost -u $dbUser $passwordFlag -e \"CREATE DATABASE IF NOT EXISTS $dbName\"";
-            exec($createCommand);
+            $file = $request->file('backup_file');
+            $sql = file_get_contents($file->getRealPath());
 
-            $restoreCommand = "mysql -h $dbHost -u $dbUser $passwordFlag $dbName < \"$filePath\"";
-            exec($restoreCommand, $output, $returnVar);
+            // Ejecuta el contenido del SQL directamente en la BD
+            DB::unprepared($sql);
 
-            // Fallback para rutas específicas de WampServer
-            if ($returnVar !== 0) {
-                $mysqlPath = "C:\wamp64\bin\mysql\mysql8.4.7\bin\mysql.exe"; 
-                $restoreCommand = "\"$mysqlPath\" -h $dbHost -u $dbUser $passwordFlag $dbName < \"$filePath\"";
-                exec($restoreCommand, $output, $returnVar);
-            }
-
-            return back()->with('status', 'Base de datos restaurada correctamente.');
+            return back()->with('status', 'Base de datos restaurada correctamente desde el archivo subido.');
         } catch (\Exception $e) {
-            return back()->with('status', 'Error: ' . $e->getMessage());
+            return back()->with('status', 'Error al restaurar: ' . $e->getMessage());
         }
     }
 
@@ -121,28 +120,48 @@ class BackupController extends Controller
             return back()->with('status', "Error al insertar: " . $e->getMessage());
         }
     }
+
+    /**
+     * Gestión de Personas (Update/Delete)
+     */
+    public function updatePersona(Request $request, $id)
+    {
+        try {
+            $persona = Persona::findOrFail($id);
+            $persona->update($request->all());
+            return back()->with('status', "Registro de {$persona->Nombre} actualizado correctamente.");
+        } catch (\Exception $e) {
+            return back()->with('status', "Error al actualizar: " . $e->getMessage());
+        }
+    }
+
     public function destroyPersona($id)
     {
         try {
             $persona = Persona::findOrFail($id);
             $persona->delete();
-
             return back()->with('status', "Persona eliminada correctamente.");
         } catch (\Exception $e) {
             return back()->with('status', "Error al eliminar: " . $e->getMessage());
         }
     }
-    public function updatePersona(Request $request, $id)
-{
-    try {
-        $persona = Persona::findOrFail($id);
-        $persona->update($request->all());
 
-        return back()->with('status', "Registro de {$persona->Nombre} actualizado correctamente.");
-    } catch (\Exception $e) {
-        return back()->with('status', "Error al actualizar: " . $e->getMessage());
+    /**
+     * Gestión de Empleos (Store/Update/Delete)
+     */
+    public function storeEmpleo(Request $request)
+    {
+        try {
+            $empleo = new Empleo();
+            $empleo->Descripcion = $request->Descripcion;
+            $empleo->Turno = $request->Turno;
+            $empleo->save();
+            return back()->with('status', 'Nuevo empleo guardado exitosamente.');
+        } catch (\Exception $e) {
+            return back()->with('status', 'Error al insertar: ' . $e->getMessage());
+        }
     }
-}
+
     public function updateEmpleo(Request $request, $id)
     {
         $empleo = Empleo::findOrFail($id);
@@ -155,19 +174,5 @@ class BackupController extends Controller
         $empleo = Empleo::findOrFail($id);
         $empleo->delete();
         return back()->with('status', 'Empleo eliminado correctamente.');
-}
-    public function storeEmpleo(Request $request)
-    {
-        try {
-            $empleo = new Empleo();
-            $empleo->Descripcion = $request->Descripcion;
-            $empleo->Turno = $request->Turno;
-            $empleo->save();
-
-            return back()->with('status', 'Nuevo empleo guardado exitosamente.');
-    } catch (\Exception $e) {
-            return back()->with('status', 'Error al insertar: ' . $e->getMessage());
     }
-}
-    
 }
