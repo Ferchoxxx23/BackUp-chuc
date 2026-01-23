@@ -45,40 +45,47 @@ class BackupController extends Controller
      */
  public function createBackup()
 {
-    $filename = "Respaldo_" . date('Y-m-d_H-i-s') . ".sql";
-    $content = "-- Respaldo generado automáticamente\n";
-    $content .= "-- Fecha: " . date('Y-m-d H:i:s') . "\n\n";
-    $content .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
+    // 1. Asegúrate de que estos nombres existan EXACTO en tu phpMyAdmin de IONOS
+    $tables = ['personas', 'empleos']; 
 
-    $tables = ['persona', 'empleo']; 
+    try {
+        $filename = "Respaldo_" . date('Y-m-d_H-i-s') . ".sql";
+        $content = "-- Respaldo generado en IONOS\n";
+        $content .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
 
-    foreach ($tables as $table) {
-        $res = DB::select("SHOW CREATE TABLE $table");
-        $createTableSql = ((array)$res[0])['Create Table'];
-        $content .= "DROP TABLE IF EXISTS `$table`;\n" . $createTableSql . ";\n\n";
+        foreach ($tables as $table) {
+            // Verificamos si la tabla existe antes de consultar
+            $res = DB::select("SHOW CREATE TABLE `$table` text");
+            if(empty($res)) continue;
 
-        $rows = DB::table($table)->get();
-        foreach ($rows as $row) {
-            $rowArray = (array)$row;
-            $columns = implode("`, `", array_keys($rowArray));
-            $escapedValues = array_map(function($value) {
-                if (is_null($value)) return "NULL";
-                return "'" . addslashes($value) . "'";
-            }, array_values($rowArray));
+            $createTableSql = ((array)$res[0])['Create Table'];
+            $content .= "DROP TABLE IF EXISTS `$table`;\n" . $createTableSql . ";\n\n";
 
-            $content .= "INSERT INTO `$table` (`$columns`) VALUES (" . implode(", ", $escapedValues) . ");\n";
+            $rows = DB::table($table)->get();
+            foreach ($rows as $row) {
+                $rowArray = (array)$row;
+                $columns = implode("`, `", array_keys($rowArray));
+                $escapedValues = array_map(function($value) {
+                    if (is_null($value)) return "NULL";
+                    // addslashes es vital para evitar errores de sintaxis en el SQL generado
+                    return "'" . addslashes($value) . "'";
+                }, array_values($rowArray));
+
+                $content .= "INSERT INTO `$table` (`$columns`) VALUES (" . implode(", ", $escapedValues) . ");\n";
+            }
+            $content .= "\n";
         }
-        $content .= "\n";
+
+        $content .= "SET FOREIGN_KEY_CHECKS=1;\n";
+
+        return response($content)
+            ->header('Content-Type', 'application/sql')
+            ->header('Content-Disposition', "attachment; filename=\"$filename\"");
+
+    } catch (\Exception $e) {
+        // Si falla, el APP_DEBUG=true nos mostrará este mensaje en naranja
+        return "Error en el respaldo: " . $e->getMessage();
     }
-
-    $content .= "SET FOREIGN_KEY_CHECKS=1;\n";
-
-    // En lugar de StreamedResponse, usamos una respuesta normal con headers de descarga
-    return response($content)
-        ->header('Content-Type', 'application/sql')
-        ->header('Content-Disposition', "attachment; filename=\"$filename\"")
-        ->header('Pragma', 'no-cache')
-        ->header('Expires', '0');
 }
 
     /**

@@ -1,0 +1,5 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Si alguien entra a la raíz, mándalo a public
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>
